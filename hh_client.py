@@ -373,18 +373,40 @@ class HHClient:
         ).first
         await chat.wait_for(state="visible", timeout=5_000)
         await chat.click(force=True)
-        for _ in range(20):
+        context = getattr(page, "context", None)
+        for _ in range(60):
+            pages = [page]
+            context_pages = getattr(context, "pages", ())
+            if callable(context_pages):
+                context_pages = context_pages()
+            for context_page in context_pages or ():
+                if context_page not in pages:
+                    pages.append(context_page)
             frame = next(
                 (
                     candidate
-                    for candidate in page.frames
-                    if candidate.url.startswith("https://chatik.hh.ru/")
+                    for context_page in pages
+                    for candidate in getattr(context_page, "frames", ())
+                    if urlparse(candidate.url).scheme == "https"
+                    and urlparse(candidate.url).hostname == "chatik.hh.ru"
                 ),
                 None,
             )
             if frame is not None:
                 return frame
             await self.sleep(0.25)
+        logger.warning(
+            "hh_chat_frame_unavailable context_pages=%s frame_hosts=%s",
+            len(pages),
+            sorted(
+                {
+                    urlparse(candidate.url).hostname or ""
+                    for context_page in pages
+                    for candidate in getattr(context_page, "frames", ())
+                    if getattr(candidate, "url", "")
+                }
+            ),
+        )
         raise RuntimeError("hh_chat_frame_unavailable")
 
     async def _ensure_cover_letter_in_chat(
