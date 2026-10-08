@@ -349,8 +349,11 @@ class HHClient:
             raise RuntimeError("post_submit_cover_letter_submit_unavailable")
         await submit.click()
         try:
+            # HH may keep the "attach cover letter" control on the response
+            # card after a successful send. The submit form closing is the
+            # reliable completion signal; waiting for the card control to hide
+            # causes false failures and an unnecessary chat-frame fallback.
             await submit.wait_for(state="hidden", timeout=15_000)
-            await attach.wait_for(state="hidden", timeout=15_000)
         except Exception as exc:
             try:
                 await self._ensure_cover_letter_in_chat(
@@ -361,11 +364,6 @@ class HHClient:
                 raise RuntimeError(
                     f"post_submit_cover_letter_not_confirmed:{chat_error}"
                 ) from exc
-
-        if required_portfolio:
-            await self._ensure_cover_letter_in_chat(
-                page, cover_letter, required_portfolio
-            )
 
     async def _open_chat_frame(self, page: Any) -> Any:
         chat = page.locator(
