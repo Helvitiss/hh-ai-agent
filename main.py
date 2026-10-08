@@ -119,6 +119,8 @@ def next_auto_batch_at(
 ) -> datetime:
     schedule = settings.auto_apply
     local = after.astimezone(ZoneInfo(schedule.timezone))
+    if schedule.start_hour == schedule.end_hour:
+        return local + timedelta(hours=interval_hours)
     window_start = local.replace(
         hour=schedule.start_hour, minute=0, second=0, microsecond=0
     )
@@ -136,10 +138,29 @@ def next_auto_batch_at(
 def next_auto_window_start_after(after: datetime, settings: Settings) -> datetime:
     schedule = settings.auto_apply
     local = after.astimezone(ZoneInfo(schedule.timezone))
+    if schedule.start_hour == schedule.end_hour:
+        return local.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
     window_start = local.replace(
         hour=schedule.start_hour, minute=0, second=0, microsecond=0
     )
     return window_start if local < window_start else window_start + timedelta(days=1)
+
+
+def next_auto_batch_after_run(
+    after: datetime,
+    settings: Settings,
+    *,
+    auto_applied: int,
+    batch_size: int,
+    interval_hours: int,
+) -> datetime:
+    if interval_hours > 0:
+        return next_auto_batch_at(after, settings, interval_hours=interval_hours)
+    if auto_applied >= batch_size:
+        return next_auto_batch_at(after, settings, interval_hours=0)
+
+    next_check = after + timedelta(minutes=max(1, settings.check_interval_minutes))
+    return next_auto_batch_at(next_check, settings, interval_hours=0)
 
 
 def restored_auto_batch_at(
@@ -260,6 +281,7 @@ async def process_vacancy(
         excluded_positions=settings.profile.candidate.excluded_positions,
         excluded_companies=settings.profile.candidate.excluded_companies,
         excluded_keywords=settings.profile.candidate.excluded_keywords,
+        preferred_technologies=settings.profile.candidate.technologies,
     )
     if rejection:
         database.transition(
@@ -305,6 +327,28 @@ async def process_vacancy(
         logger.info("vacancy_rejected job_id=%s source=llm", summary.id)
         return VacancyProcessResult(
             "rejected_by_llm", suitability.reason, PageState.VACANCY_LOADED
+        )
+
+    if (
+        settings.auto_apply.enabled
+        and suitability.confidence < settings.auto_apply.min_confidence
+    ):
+        reason = (
+            f"Below auto-apply confidence threshold "
+            f"({suitability.confidence:.2f} < {settings.auto_apply.min_confidence:.2f}): "
+            f"{suitability.reason}"
+        )
+        database.transition(
+            summary.id,
+            VacancyStatus.DISCOVERED,
+            VacancyStatus.SKIPPED,
+            llm_decision=True,
+            llm_reason=reason,
+            confidence=suitability.confidence,
+        )
+        logger.info("vacancy_skipped job_id=%s reason=below_auto_apply_confidence", summary.id)
+        return VacancyProcessResult(
+            "skipped_low_confidence", reason, PageState.VACANCY_LOADED
         )
 
     pesec_on_approve(summary.title, score=suitability.confidence)
@@ -671,9 +715,15 @@ async def agent_loop(
                     if control.paused:
                         control.next_run_at = None
                     else:
-                        next_auto_batch = next_auto_batch_at(
+                        auto_applied = max(
+                            0,
+                            database.applied_today(clock()) - applications_before,
+                        )
+                        next_auto_batch = next_auto_batch_after_run(
                             clock(),
                             settings,
+                            auto_applied=auto_applied,
+                            batch_size=batch_size,
                             interval_hours=randint(
                                 settings.auto_apply.min_interval_hours,
                                 settings.auto_apply.max_interval_hours,
@@ -684,11 +734,7 @@ async def agent_loop(
                         await telegram.notify(
                             format_auto_batch_report(
                                 run,
-                                auto_applied=max(
-                                    0,
-                                    database.applied_today(clock())
-                                    - applications_before,
-                                ),
+                                auto_applied=auto_applied,
                                 next_batch=control.next_run_at,
                                 settings=settings,
                             )

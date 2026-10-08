@@ -296,6 +296,19 @@ def test_markdown_separators_and_standalone_dots_are_removed(tmp_path: Path) -> 
     assert cover_letter_validation_error(letter, PORTFOLIO, CLOSING, 500) == ""
 
 
+def test_generic_greeting_name_intro_and_signature_are_removed() -> None:
+    from cover_letter import normalize_cover_letter_body
+
+    letter = normalize_cover_letter_body(
+        "Дорогие коллеги,\n\nЯ, Александр, backend-разработчик. "
+        "Строю платёжные сервисы.\n\n"
+        "Я благодарен за возможность подать заявку и готов обсудить кандидатуру.\n\n"
+        "С уважением,\nАлександр."
+    )
+
+    assert letter == "Строю платёжные сервисы."
+
+
 def test_two_oversized_drafts_are_rejected_without_character_truncation(
     tmp_path: Path,
 ) -> None:

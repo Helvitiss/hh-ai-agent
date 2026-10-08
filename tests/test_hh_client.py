@@ -157,12 +157,17 @@ class PostSubmitCoverLetterLocator:
         self.first = self
 
     async def is_visible(self) -> bool:
+        if self.kind == "cookie":
+            return self.page.cookie_visible
         if self.kind == "attach":
             return not self.page.form_open and not self.page.submitted
         return self.page.form_open
 
-    async def click(self) -> None:
-        if self.kind == "attach":
+    async def click(self, **kwargs) -> None:
+        if self.kind == "cookie":
+            self.page.cookie_visible = False
+        elif self.kind == "attach":
+            self.page.attach_forced = bool(kwargs.get("force"))
             self.page.form_open = True
         elif self.kind == "submit":
             self.page.form_open = False
@@ -185,8 +190,12 @@ class PostSubmitCoverLetterPage:
         self.form_open = False
         self.submitted = False
         self.value = ""
+        self.cookie_visible = True
+        self.attach_forced = False
 
     def locator(self, selector: str) -> PostSubmitCoverLetterLocator:
+        if selector == 'button[data-qa="cookies-policy-informer-accept"]':
+            return PostSubmitCoverLetterLocator(self, "cookie")
         if selector == 'button[data-qa="responded-success-attach-cover-letter"]':
             return PostSubmitCoverLetterLocator(self, "attach")
         if selector == 'textarea[data-qa="vacancy-response-popup-form-letter-input"]':
@@ -205,8 +214,13 @@ class ChatCoverLetterLocator:
     async def wait_for(self, **kwargs) -> None:
         return None
 
+    async def is_visible(self) -> bool:
+        return self.kind == "cookie" and self.frame.cookie_visible
+
     async def click(self) -> None:
-        if self.kind == "attach":
+        if self.kind == "cookie":
+            self.frame.cookie_visible = False
+        elif self.kind == "attach":
             self.frame.form_open = True
         elif self.kind == "send":
             self.frame.sent = True
@@ -230,6 +244,7 @@ class ChatCoverLetterFrame:
         self.form_open = False
         self.sent = False
         self.value = ""
+        self.cookie_visible = False
 
     def locator(self, selector: str) -> ChatCoverLetterLocator:
         if selector == "body":
@@ -257,6 +272,8 @@ class ChatCoverLetterPage:
         self.frames = [self.frame]
 
     def locator(self, selector: str) -> ChatCoverLetterLocator:
+        if selector == 'button[data-qa="cookies-policy-informer-accept"]':
+            return ChatCoverLetterLocator(self.frame, "cookie")
         assert selector == 'button[data-qa="vacancy-response-link-view-topic"]'
         return ChatCoverLetterLocator(self.frame, "chat")
 
@@ -725,6 +742,8 @@ def test_post_submit_cover_letter_is_filled_verified_and_sent(tmp_path: Path) ->
 
     asyncio.run(client._attach_cover_letter_after_response(page, letter, portfolio))
 
+    assert not page.cookie_visible
+    assert page.attach_forced
     assert page.value == letter
     assert page.submitted
 
@@ -793,3 +812,51 @@ def test_vacancy_filter_checks_position_company_and_industry(
         excluded_companies=("blocked",),
         excluded_keywords=("разработка игр", "мобильных игр"),
     ) == expected
+
+
+def test_vacancy_filter_rejects_explicit_nonpreferred_programming_language() -> None:
+    assert vacancy_rejection_reason(
+        title="С++ разработчик (crypto биржи)",
+        company="Example",
+        description="Python can also be useful for scripts.",
+        excluded_positions=(),
+        excluded_companies=(),
+        excluded_keywords=(),
+        preferred_technologies=("Python", "FastAPI", "PostgreSQL"),
+    ) == "language:c++"
+
+
+def test_vacancy_filter_rejects_1c_for_python_backend_candidate() -> None:
+    assert vacancy_rejection_reason(
+        title="Программист 1С",
+        company="Example",
+        description="1C development and support",
+        excluded_positions=(),
+        excluded_companies=(),
+        excluded_keywords=(),
+        preferred_technologies=("Python", "FastAPI", "PostgreSQL"),
+    ) == "language:1c"
+
+
+def test_vacancy_filter_accepts_preferred_language_in_mixed_title() -> None:
+    assert vacancy_rejection_reason(
+        title="Python Backend Developer",
+        company="Example",
+        description="Build backend services.",
+        excluded_positions=(),
+        excluded_companies=(),
+        excluded_keywords=(),
+        preferred_technologies=("Python", "FastAPI"),
+    ) is None
+
+
+def test_vacancy_filter_rejects_fullstack_title_for_backend_candidate() -> None:
+    assert vacancy_rejection_reason(
+        title="LLM Fullstack Developer",
+        company="Example",
+        description="Python, FastAPI, LLM integration",
+        excluded_positions=("fullstack", "full-stack", "full stack"),
+        excluded_companies=(),
+        excluded_keywords=(),
+        preferred_technologies=("Python", "FastAPI", "PostgreSQL"),
+    ) == "position:fullstack"

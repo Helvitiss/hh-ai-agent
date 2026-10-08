@@ -288,15 +288,33 @@ class HHClient:
         await self._delay()
         return True
 
+    async def _dismiss_cookie_notice(self, page: Any) -> bool:
+        """Dismiss HH's cookie notice so it cannot block vacancy controls."""
+        notice = page.locator(
+            'button[data-qa="cookies-policy-informer-accept"]'
+        ).first
+        if not await notice.is_visible():
+            return False
+        await notice.click()
+        await notice.wait_for(state="hidden", timeout=5_000)
+        logger.info("hh_cookie_notice_dismissed")
+        return True
+
     async def _attach_cover_letter_after_response(
         self, page: Any, cover_letter: str, required_portfolio: str
     ) -> None:
+        await self._dismiss_cookie_notice(page)
         attach = page.locator(
             'button[data-qa="responded-success-attach-cover-letter"]'
         ).first
         if not await attach.is_visible():
             raise RuntimeError("post_submit_cover_letter_control_unavailable")
-        await attach.click()
+        # HH can leave a transparent modal backdrop above the post-submit
+        # success panel. Playwright's normal hit-target check then times out
+        # even though this exact button is visible and enabled. The selector is
+        # specific to the attach-cover-letter action; force the click and still
+        # verify that the letter form opens below.
+        await attach.click(force=True)
         await self._delay()
 
         textarea = page.locator(
@@ -351,6 +369,7 @@ class HHClient:
     async def _ensure_cover_letter_in_chat(
         self, page: Any, cover_letter: str, required_portfolio: str
     ) -> None:
+        await self._dismiss_cookie_notice(page)
         post_statuses: list[int] = []
         if hasattr(page, "on"):
             def capture_response(response: Any) -> None:
@@ -436,6 +455,7 @@ class HHClient:
         try:
             page = await self.context.new_page()
             await page.goto(vacancy.url, wait_until="domcontentloaded", timeout=30_000)
+            await self._dismiss_cookie_notice(page)
             attach = page.locator(
                 'button[data-qa="responded-success-attach-cover-letter"]'
             ).first
@@ -711,6 +731,7 @@ class HHClient:
             page = await self.context.new_page()
             await self._delay()
             await page.goto(vacancy.url, wait_until="domcontentloaded", timeout=30_000)
+            await self._dismiss_cookie_notice(page)
 
             # Check if user is unauthenticated
             if await page.locator('input[type="tel"], a[data-qa="mainmenu_applicantAccess"]:has-text("Войти")').first.is_visible():

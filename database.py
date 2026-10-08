@@ -102,6 +102,7 @@ ALLOWED_TRANSITIONS = {
         VacancyStatus.REJECTED_BY_LLM,
         VacancyStatus.ANALYSIS_FAILED,
         VacancyStatus.PENDING_APPROVAL,
+        VacancyStatus.SKIPPED,
         VacancyStatus.APPLY_FAILED,
     },
     VacancyStatus.PENDING_APPROVAL: {

@@ -30,6 +30,7 @@ from main import (
     agent_loop,
     format_auto_batch_report,
     next_auto_batch_at,
+    next_auto_batch_after_run,
     next_auto_window_start_after,
     process_vacancy,
     restored_auto_batch_at,
@@ -351,7 +352,7 @@ def test_auto_apply_uses_only_high_confidence_vacancies(tmp_path: Path) -> None:
     assert telegram.notifications == ["✓ Автоотклик отправлен: Python developer"]
 
 
-def test_auto_apply_keeps_lower_confidence_vacancy_for_manual_review(
+def test_auto_apply_skips_lower_confidence_vacancy_without_manual_review(
     tmp_path: Path,
 ) -> None:
     app_settings = auto_settings(tmp_path)
@@ -379,10 +380,10 @@ def test_auto_apply_keeps_lower_confidence_vacancy_for_manual_review(
         )
     )
 
-    assert result.outcome == "telegram_card"
+    assert result.outcome == "skipped_low_confidence"
     assert auto_service.calls == []
-    assert database.get(SUMMARY.id).status is VacancyStatus.PENDING_APPROVAL
-    assert telegram.previews == [(SUMMARY.id, True)]
+    assert database.get(SUMMARY.id).status is VacancyStatus.SKIPPED
+    assert telegram.previews == []
 
 
 def test_auto_batch_stops_after_its_send_target(tmp_path: Path) -> None:
@@ -436,6 +437,32 @@ def test_auto_batch_schedule_stays_inside_configured_daytime_window(
     assert after_late_batch.astimezone(local_timezone).hour == 10
     assert after_late_batch.date() > late_window.astimezone(local_timezone).date()
     assert after_limit.astimezone(local_timezone).hour == 10
+
+
+def test_zero_interval_starts_next_full_batch_immediately_and_throttles_idle(
+    tmp_path: Path,
+) -> None:
+    app_settings = auto_settings(tmp_path)
+    app_settings = replace(app_settings, check_interval_minutes=30)
+    now = datetime(2026, 7, 26, 8, tzinfo=UTC)
+
+    immediate = next_auto_batch_after_run(
+        now,
+        app_settings,
+        auto_applied=20,
+        batch_size=20,
+        interval_hours=0,
+    )
+    idle = next_auto_batch_after_run(
+        now,
+        app_settings,
+        auto_applied=3,
+        batch_size=20,
+        interval_hours=0,
+    )
+
+    assert immediate == now
+    assert idle == now + timedelta(minutes=30)
 
 
 def test_auto_schedule_restart_preserves_minimum_interval(tmp_path: Path) -> None:

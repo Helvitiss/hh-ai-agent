@@ -284,10 +284,10 @@ def load_settings(
     auto_apply_min_confidence = ratio("AUTO_APPLY_MIN_CONFIDENCE", "0.85")
     auto_apply_min_batch_size = positive_integer("AUTO_APPLY_MIN_BATCH_SIZE", "5")
     auto_apply_max_batch_size = positive_integer("AUTO_APPLY_MAX_BATCH_SIZE", "6")
-    auto_apply_min_interval_hours = positive_integer(
+    auto_apply_min_interval_hours = non_negative_integer(
         "AUTO_APPLY_MIN_INTERVAL_HOURS", "3"
     )
-    auto_apply_max_interval_hours = positive_integer(
+    auto_apply_max_interval_hours = non_negative_integer(
         "AUTO_APPLY_MAX_INTERVAL_HOURS", "5"
     )
     auto_apply_start_hour = hour("AUTO_APPLY_START_HOUR", "10")
@@ -307,8 +307,9 @@ def load_settings(
         errors.append(
             "AUTO_APPLY_MIN_INTERVAL_HOURS must be at most AUTO_APPLY_MAX_INTERVAL_HOURS"
         )
-    if auto_apply_start_hour >= auto_apply_end_hour:
-        errors.append("AUTO_APPLY_START_HOUR must be before AUTO_APPLY_END_HOUR")
+    # Equal start/end hours represent a 24-hour window (for example 0/0).
+    if auto_apply_start_hour > auto_apply_end_hour:
+        errors.append("AUTO_APPLY_START_HOUR must not be after AUTO_APPLY_END_HOUR")
     if auto_apply_enabled and app_mode != "approval":
         errors.append("AUTO_APPLY_ENABLED requires APP_MODE=approval")
     if auto_apply_enabled and not enable_real_apply:

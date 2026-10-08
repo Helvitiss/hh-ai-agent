@@ -5,6 +5,19 @@ _HORIZONTAL_RULE = re.compile(r"^[ \t]*(?:-{3,}|_{3,}|\*{3,})[ \t]*$")
 _PUNCTUATION_ONLY = re.compile(r"^[ \t]*[.…。·•,:;!?-]+[ \t]*$")
 _MARKDOWN_LINK = re.compile(r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)")
 _COMPLETE_ENDING = re.compile(r'(?:[.!?…][»”"\')\]]*|[🙂👋])$')
+_GENERIC_GREETING = re.compile(
+    r"(?im)^\s*(?:дорогие коллеги|уважаемые коллеги|здравствуйте(?:,\s*коллеги)?|"
+    r"добрый день(?:,\s*коллеги)?)[,!\.\s]*$"
+)
+_NAME_INTRO = re.compile(r"(?i)^я,\s*александр\b[^.!?\n]*[.!?]\s*")
+_SIGNATURE = re.compile(
+    r"(?ims)(?:\n\s*)?(?:с уважением|с наилучшими пожеланиями|искренне ваш)[,!\.\s]*\n"
+    r"\s*Александр\.?\s*$"
+)
+_GENERIC_FINAL_PARAGRAPH = re.compile(
+    r"(?ims)(?:\n\s*\n|^)\s*(?:(?:я\s+)?благодар(?:ен|на|ю)|буду\s+рад(?:а)?|"
+    r"готов(?:а)?\s+обсудить\b)[^\n]*(?:\n(?!\s*\n)[^\n]*)*\s*$"
+)
 
 
 def letter_urls(text: str) -> set[str]:
@@ -30,6 +43,10 @@ def normalize_cover_letter_body(
     """Convert an LLM draft into clean plain text without changing its prose."""
     body = letter.replace("\r\n", "\n").replace("\r", "\n").strip()
     body = _MARKDOWN_LINK.sub(_plain_markdown_link, body)
+    body = _GENERIC_GREETING.sub("", body).strip()
+    body = _NAME_INTRO.sub("", body, count=1)
+    body = _SIGNATURE.sub("", body).strip()
+    body = _GENERIC_FINAL_PARAGRAPH.sub("", body).strip()
     if closing and body.rstrip().endswith(closing):
         body = body.rstrip()[: -len(closing)].rstrip()
     if required_url:

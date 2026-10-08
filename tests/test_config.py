@@ -110,11 +110,30 @@ def test_auto_apply_settings_require_live_approval_and_valid_window(
     assert settings.auto_apply.max_interval_hours == 5
 
 
+def test_auto_apply_settings_allow_zero_interval_for_immediate_batches(
+    tmp_path: Path,
+) -> None:
+    enabled = {
+        **VALID_ENV,
+        "APP_MODE": "approval",
+        "ENABLE_REAL_APPLY": "true",
+        "MAX_APPLICATIONS_PER_DAY": "200",
+        "AUTO_APPLY_ENABLED": "true",
+        "AUTO_APPLY_MIN_INTERVAL_HOURS": "0",
+        "AUTO_APPLY_MAX_INTERVAL_HOURS": "0",
+    }
+
+    settings = load_settings(profile_path=write_profile(tmp_path), environ=enabled)
+
+    assert settings.auto_apply.min_interval_hours == 0
+    assert settings.auto_apply.max_interval_hours == 0
+
+
 @pytest.mark.parametrize(
     ("key", "value", "message"),
     [
         ("AUTO_APPLY_ENABLED", "true", "AUTO_APPLY_ENABLED requires APP_MODE=approval"),
-        ("AUTO_APPLY_START_HOUR", "22", "AUTO_APPLY_START_HOUR must be before AUTO_APPLY_END_HOUR"),
+        ("AUTO_APPLY_START_HOUR", "23", "AUTO_APPLY_START_HOUR must not be after AUTO_APPLY_END_HOUR"),
         ("AUTO_APPLY_TIMEZONE", "", "AUTO_APPLY_TIMEZONE must be an IANA timezone"),
         ("AUTO_APPLY_TIMEZONE", "Not/AZone", "AUTO_APPLY_TIMEZONE must be an IANA timezone"),
     ],
@@ -124,7 +143,12 @@ def test_auto_apply_settings_reject_unsafe_configuration(
 ) -> None:
     environ = {**VALID_ENV, key: value}
     if key == "AUTO_APPLY_START_HOUR":
-        environ.update(APP_MODE="approval", ENABLE_REAL_APPLY="true", AUTO_APPLY_ENABLED="true")
+        environ.update(
+            APP_MODE="approval",
+            ENABLE_REAL_APPLY="true",
+            AUTO_APPLY_ENABLED="true",
+            MAX_APPLICATIONS_PER_DAY="20",
+        )
 
     with pytest.raises(ConfigError, match=message):
         load_settings(profile_path=write_profile(tmp_path), environ=environ)
