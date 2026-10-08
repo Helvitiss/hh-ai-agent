@@ -437,10 +437,20 @@ async def process_vacancy(
             except TelegramAPIError:
                 logger.warning("auto_application_notification_failed job_id=%s", summary.id)
             return VacancyProcessResult("auto_applied", page_state=PageState.VACANCY_LOADED)
+        application_error = (vacancy.error_text if vacancy is not None else "")
+        if application_error == "questionnaire_required":
+            failure_message = "HH требует заполнить анкету; вакансия пропущена."
+        elif application_error.startswith("post_submit_cover_letter_"):
+            failure_message = (
+                "HH не подтвердил сопроводительное. Отклик мог отправиться; "
+                "автоподача приостановлена для проверки."
+            )
+        else:
+            failure_message = auto_result.message
         try:
             await telegram.notify(
                 f"✗ Автоотклик не отправлен: {vacancy.title if vacancy else summary.title}. "
-                f"{auto_result.message}"
+                f"{failure_message}"
             )
         except TelegramAPIError:
             logger.warning("auto_application_notification_failed job_id=%s", summary.id)
@@ -734,13 +744,13 @@ async def agent_loop(
                         auto_apply_batch_limit=batch_size,
                         now_factory=clock,
                     )
+                    auto_applied = max(
+                        0,
+                        database.applied_today(clock()) - applications_before,
+                    )
                     if control.paused:
                         control.next_run_at = None
                     else:
-                        auto_applied = max(
-                            0,
-                            database.applied_today(clock()) - applications_before,
-                        )
                         next_auto_batch = next_auto_batch_after_run(
                             clock(),
                             settings,
