@@ -31,7 +31,7 @@ class FakeLocator:
     async def is_visible(self) -> bool:
         return self.visible
 
-    async def click(self) -> None:
+    async def click(self, **_kwargs) -> None:
         if self.clicks is not None:
             self.clicks.append(self.name)
 
@@ -161,10 +161,11 @@ def pending(
     job_id: str = "job-1",
     letter: str = "Letter",
     confidence: float = 0.9,
+    title: str = "Python developer",
 ) -> None:
     assert database.discover(
         job_id=job_id,
-        title="Python developer",
+        title=title,
         company="Example",
         url=f"https://example.com/vacancy/{job_id}",
         description_hash="hash",
@@ -262,6 +263,75 @@ def test_approval_service_is_the_valid_path_to_physical_submit(tmp_path: Path) -
     assert all("text=" not in selector for selector in page.selectors)
     assert database.get("job-1").status is VacancyStatus.APPLIED
 
+    duplicate = asyncio.run(service.approve_and_apply("job-1", 42))
+
+    assert not duplicate.ok
+    assert "уже отправлен" in duplicate.message
+    assert page.clicks == ["open_response", "final_submit"]
+
+
+def test_approval_rechecks_excluded_title_before_submitting(tmp_path: Path) -> None:
+    app_settings = settings(
+        tmp_path, APP_MODE="approval", ENABLE_REAL_APPLY="true", TG_USER_ID="42"
+    )
+    candidate = replace(
+        app_settings.profile.candidate,
+        excluded_positions=("lead",),
+    )
+    app_settings = replace(
+        app_settings,
+        profile=replace(app_settings.profile, candidate=candidate),
+    )
+    database = Database(app_settings.database_path)
+    database.init()
+    pending(database, title="Lead Python Engineer")
+    client = HHClient(
+        NeverPageContext(),
+        app_settings,
+        database,
+        ApprovalGuard(app_settings, database, now_factory=lambda: NOW + timedelta(minutes=2)),
+        sleep=no_sleep,
+    )
+    service = ApprovalService(
+        app_settings, database, client, now_factory=lambda: NOW + timedelta(minutes=1)
+    )
+
+    result = asyncio.run(service.approve_and_apply("job-1", 42))
+
+    assert not result.ok
+    assert "фильтр" in result.message
+    assert database.get("job-1").status is VacancyStatus.SKIPPED
+
+
+def test_application_submissions_are_serialized(tmp_path: Path, monkeypatch) -> None:
+    app_settings = settings(tmp_path, APP_MODE="approval", ENABLE_REAL_APPLY="true")
+    database = Database(app_settings.database_path)
+    database.init()
+    client = HHClient(
+        NeverPageContext(), app_settings, database, ApprovalGuard(app_settings, database)
+    )
+    active = 0
+    peak = 0
+
+    async def fake_submit(_permission):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return True
+
+    monkeypatch.setattr(client, "_submit_application", fake_submit)
+
+    async def run_both():
+        return await asyncio.gather(
+            client.submit_application(ApplicationPermission("job-1", "a", 42)),
+            client.submit_application(ApplicationPermission("job-2", "b", 42)),
+        )
+
+    assert asyncio.run(run_both()) == [True, True]
+    assert peak == 1
+
 
 def test_browser_error_after_claim_becomes_apply_failed(tmp_path: Path) -> None:
     app_settings = settings(
@@ -320,7 +390,9 @@ def test_page_creation_error_after_claim_becomes_apply_failed(tmp_path: Path) ->
     assert "page creation failed" in vacancy.error_text
 
 
-def test_missing_explicit_success_signal_fails_closed(tmp_path: Path) -> None:
+def test_missing_success_signal_fails_closed_when_response_is_still_available(
+    tmp_path: Path,
+) -> None:
     app_settings = settings(
         tmp_path, APP_MODE="approval", ENABLE_REAL_APPLY="true", TG_USER_ID="42"
     )
@@ -329,7 +401,10 @@ def test_missing_explicit_success_signal_fails_closed(tmp_path: Path) -> None:
     pending(database)
     token = database.approve("job-1", 42, 42, NOW + timedelta(minutes=1))
     assert token
-    page = FakeApplicationPage(success_visible=False)
+    page = FakeApplicationPage(
+        success_visible=False,
+        response_still_available=True,
+    )
     client = HHClient(
         FakeApplicationContext(page),
         app_settings,
@@ -408,6 +483,36 @@ def test_success_marker_without_hh_confirmation_fails_closed(tmp_path: Path) -> 
     assert not sent
     assert page.clicks == ["open_response", "final_submit"]
     assert database.get("job-1").status is VacancyStatus.APPLY_FAILED
+
+
+def test_missing_success_banner_uses_response_state_confirmation(tmp_path: Path) -> None:
+    app_settings = settings(
+        tmp_path, APP_MODE="approval", ENABLE_REAL_APPLY="true", TG_USER_ID="42"
+    )
+    database = Database(app_settings.database_path)
+    database.init()
+    pending(database)
+    token = database.approve("job-1", 42, 42, NOW + timedelta(minutes=1))
+    assert token
+    page = FakeApplicationPage(
+        success_visible=False,
+        response_still_available=False,
+    )
+    client = HHClient(
+        FakeApplicationContext(page),
+        app_settings,
+        database,
+        ApprovalGuard(app_settings, database, now_factory=lambda: NOW + timedelta(minutes=2)),
+        sleep=no_sleep,
+        now_factory=lambda: NOW + timedelta(minutes=3),
+    )
+
+    sent = asyncio.run(
+        client.submit_application(ApplicationPermission("job-1", token, 42))
+    )
+
+    assert sent
+    assert database.get("job-1").status is VacancyStatus.APPLIED
 
 
 def test_permission_is_rechecked_before_first_response_action(

@@ -90,6 +90,22 @@ def test_cloakbrowser_launch_error_is_actionable(tmp_path: Path) -> None:
     assert "binary blocked" in message
 
 
+def test_browser_close_is_idempotent_after_user_closes_window(tmp_path: Path) -> None:
+    class AlreadyClosedContext(FakeContext):
+        async def close(self) -> None:
+            raise RuntimeError("Target page, context or browser has been closed")
+
+    async def launcher(profile_dir: Path, *, headless: bool):
+        return AlreadyClosedContext()
+
+    backend = CloakBrowserBackend(tmp_path / "profile", False, launcher=launcher)
+    asyncio.run(backend.start())
+
+    asyncio.run(backend.close())
+
+    assert backend._context is None
+
+
 def test_browser_backends_do_not_receive_approval_state(tmp_path: Path) -> None:
     backends = [
         CloakBrowserBackend(tmp_path / "cloak", False, launcher=None),

@@ -205,6 +205,23 @@ class PostSubmitCoverLetterPage:
         raise AssertionError(selector)
 
 
+class MissingPostSubmitTextarea:
+    first = None
+
+    def __init__(self):
+        self.first = self
+
+    async def wait_for(self, *, state: str, timeout: int) -> None:
+        raise RuntimeError("HH popup did not open")
+
+
+class NoPopupPostSubmitPage(PostSubmitCoverLetterPage):
+    def locator(self, selector: str):
+        if selector == 'textarea[data-qa="vacancy-response-popup-form-letter-input"]':
+            return MissingPostSubmitTextarea()
+        return super().locator(selector)
+
+
 class ChatCoverLetterLocator:
     def __init__(self, frame: "ChatCoverLetterFrame", kind: str):
         self.frame = frame
@@ -217,7 +234,7 @@ class ChatCoverLetterLocator:
     async def is_visible(self) -> bool:
         return self.kind == "cookie" and self.frame.cookie_visible
 
-    async def click(self) -> None:
+    async def click(self, **_kwargs) -> None:
         if self.kind == "cookie":
             self.frame.cookie_visible = False
         elif self.kind == "attach":
@@ -746,6 +763,35 @@ def test_post_submit_cover_letter_is_filled_verified_and_sent(tmp_path: Path) ->
     assert page.attach_forced
     assert page.value == letter
     assert page.submitted
+
+
+def test_missing_post_submit_popup_falls_back_to_chat(tmp_path: Path) -> None:
+    settings = replace(
+        load_settings(profile_path=write_profile(tmp_path), environ=VALID_ENV),
+        database_path=tmp_path / "agent.db",
+        min_seconds_between_actions=0,
+    )
+    database = Database(settings.database_path)
+    database.init()
+    page = NoPopupPostSubmitPage()
+    client = HHClient(
+        FakeContext(page),
+        settings,
+        database,
+        ApprovalGuard(settings, database),
+        sleep=lambda _: asyncio.sleep(0),
+    )
+    calls: list[tuple[object, str, str]] = []
+
+    async def ensure_in_chat(actual_page, letter, portfolio):
+        calls.append((actual_page, letter, portfolio))
+
+    client._ensure_cover_letter_in_chat = ensure_in_chat
+    letter = "Relevant Python backend experience."
+
+    asyncio.run(client._attach_cover_letter_after_response(page, letter, ""))
+
+    assert calls == [(page, letter, "")]
 
 
 def test_missing_cover_letter_is_attached_and_verified_inside_chat_frame(

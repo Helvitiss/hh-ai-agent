@@ -323,6 +323,62 @@ def test_approval_mode_records_pending_and_sends_actions(tmp_path: Path) -> None
     assert telegram.previews == [("job-1", True)]
 
 
+def test_resumed_pending_vacancy_is_rechecked_against_current_profile(
+    tmp_path: Path,
+) -> None:
+    base_settings = settings(tmp_path, "approval")
+    candidate = replace(
+        base_settings.profile.candidate,
+        excluded_positions=("lead",),
+    )
+    app_settings = replace(
+        base_settings,
+        profile=replace(base_settings.profile, candidate=candidate),
+    )
+    database = Database(app_settings.database_path)
+    database.init()
+    assert database.discover(
+        job_id="lead-job",
+        title="Lead Python Engineer",
+        company="Example",
+        url="https://example.com/vacancy/lead-job",
+        description_hash="hash",
+        search_query="Python backend",
+        discovered_at=NOW,
+    )
+    assert database.request_approval(
+        job_id="lead-job",
+        cover_letter="Relevant work.",
+        llm_decision=True,
+        llm_reason="Relevant",
+        confidence=0.85,
+        now=NOW,
+    )
+    telegram = FakeTelegram()
+
+    result = asyncio.run(
+        process_vacancy(
+            VacancySummary(
+                "lead-job",
+                "Lead Python Engineer",
+                "https://example.com/vacancy/lead-job",
+                "Python backend",
+                previously_sent=True,
+            ),
+            app_settings,
+            database,
+            FakeHHClient(VacancyDetails(SUMMARY, PageState.VACANCY_LOADED)),
+            FakeAnalyzer(),
+            telegram,
+            now_factory=lambda: NOW,
+        )
+    )
+
+    assert result.outcome == "rejected_by_filter"
+    assert database.get("lead-job").status is VacancyStatus.SKIPPED
+    assert telegram.previews == []
+
+
 def test_auto_apply_uses_only_high_confidence_vacancies(tmp_path: Path) -> None:
     app_settings = auto_settings(tmp_path)
     database = Database(app_settings.database_path)

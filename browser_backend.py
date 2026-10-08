@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, Protocol
 
 from config import Settings
+
+
+logger = logging.getLogger(__name__)
 
 
 Launcher = Callable[..., Awaitable[Any]]
@@ -50,8 +54,12 @@ class CloakBrowserBackend:
 
     async def close(self) -> None:
         if self._context is not None:
-            await self._context.close()
-            self._context = None
+            try:
+                await self._context.close()
+            except Exception as exc:
+                logger.info("browser_context_already_closed error=%s", exc)
+            finally:
+                self._context = None
 
 
 class PlaywrightBrowserBackend:
@@ -91,11 +99,19 @@ class PlaywrightBrowserBackend:
 
     async def close(self) -> None:
         if self._context is not None:
-            await self._context.close()
-            self._context = None
+            try:
+                await self._context.close()
+            except Exception as exc:
+                logger.info("browser_context_already_closed error=%s", exc)
+            finally:
+                self._context = None
         if self._playwright is not None:
-            await self._playwright.stop()
-            self._playwright = None
+            try:
+                await self._playwright.stop()
+            except Exception as exc:
+                logger.info("playwright_already_stopped error=%s", exc)
+            finally:
+                self._playwright = None
 
 
 def create_browser_backend(settings: Settings) -> BrowserBackend:

@@ -187,6 +187,7 @@ class HHClient:
         self.approval_guard = approval_guard
         self.sleep = sleep
         self.now_factory = now_factory or (lambda: datetime.now(UTC))
+        self._application_lock = asyncio.Lock()
 
     async def _delay(self) -> None:
         await self.sleep(
@@ -320,7 +321,19 @@ class HHClient:
         textarea = page.locator(
             'textarea[data-qa="vacancy-response-popup-form-letter-input"]'
         ).first
-        await textarea.wait_for(state="visible", timeout=5_000)
+        try:
+            await textarea.wait_for(state="visible", timeout=15_000)
+        except Exception as popup_error:
+            logger.warning("post_submit_letter_popup_unavailable_try_chat")
+            try:
+                await self._ensure_cover_letter_in_chat(
+                    page, cover_letter, required_portfolio
+                )
+                return
+            except Exception as chat_error:
+                raise RuntimeError(
+                    f"post_submit_cover_letter_popup_and_chat_unavailable:{chat_error}"
+                ) from popup_error
         await textarea.fill(cover_letter)
         await self._delay()
         entered_letter = await textarea.input_value()
@@ -339,7 +352,15 @@ class HHClient:
             await submit.wait_for(state="hidden", timeout=15_000)
             await attach.wait_for(state="hidden", timeout=15_000)
         except Exception as exc:
-            raise RuntimeError("post_submit_cover_letter_not_confirmed") from exc
+            try:
+                await self._ensure_cover_letter_in_chat(
+                    page, cover_letter, required_portfolio
+                )
+                return
+            except Exception as chat_error:
+                raise RuntimeError(
+                    f"post_submit_cover_letter_not_confirmed:{chat_error}"
+                ) from exc
 
         if required_portfolio:
             await self._ensure_cover_letter_in_chat(
@@ -351,7 +372,7 @@ class HHClient:
             'button[data-qa="vacancy-response-link-view-topic"]'
         ).first
         await chat.wait_for(state="visible", timeout=5_000)
-        await chat.click()
+        await chat.click(force=True)
         for _ in range(20):
             frame = next(
                 (
@@ -382,11 +403,12 @@ class HHClient:
             page.on("response", capture_response)
         frame = await self._open_chat_frame(page)
         body = await frame.locator("body").inner_text()
-        if required_portfolio in body:
+        signature = required_portfolio or cover_letter[: min(80, len(cover_letter))]
+        if signature and signature in body:
             return
         attach = frame.get_by_text("Добавить сопроводительное", exact=False).first
         await attach.wait_for(state="visible", timeout=5_000)
-        await attach.click()
+        await attach.click(force=True)
         await self.sleep(0.5)
         textarea = frame.locator('textarea[data-qa="text-input"]').first
         await textarea.wait_for(state="visible", timeout=5_000)
@@ -404,8 +426,8 @@ class HHClient:
         await send.click()
         try:
             await frame.wait_for_function(
-                "url => document.body.innerText.includes(url)",
-                required_portfolio,
+                "text => document.body.innerText.includes(text)",
+                signature,
                 timeout=15_000,
             )
         except Exception as exc:
@@ -414,7 +436,7 @@ class HHClient:
                 await page.reload(wait_until="domcontentloaded", timeout=30_000)
                 refreshed_frame = await self._open_chat_frame(page)
                 refreshed_body = await refreshed_frame.locator("body").inner_text()
-                if required_portfolio in refreshed_body:
+                if signature and signature in refreshed_body:
                     return
             raise RuntimeError(
                 "chat_cover_letter_not_confirmed:"
@@ -706,6 +728,12 @@ class HHClient:
         return PageState.CAPTCHA_DETECTED
 
     async def submit_application(self, permission: ApplicationPermission) -> bool:
+        # Telegram callbacks may approve multiple cards concurrently. Serialize
+        # submits because they share one persistent HH browser context.
+        async with self._application_lock:
+            return await self._submit_application(permission)
+
+    async def _submit_application(self, permission: ApplicationPermission) -> bool:
         claim = self.approval_guard.claim(permission)
         if not claim.allowed or claim.vacancy is None:
             logger.warning(
@@ -836,8 +864,15 @@ class HHClient:
                 .or_(page.get_by_text("Отклик отправлен", exact=False))
                 .first
             )
-            await success_marker.wait_for(state="visible", timeout=5_000)
-            if not await self._response_confirmed(page, vacancy.url):
+            try:
+                await success_marker.wait_for(state="visible", timeout=5_000)
+                response_confirmed = await self._response_confirmed(page, vacancy.url)
+            except Exception:
+                # HH sometimes completes a response without rendering the
+                # success banner. Verify the actual response control instead
+                # of treating a missing banner as an application failure.
+                response_confirmed = await self._response_confirmed(page, vacancy.url)
+            if not response_confirmed:
                 raise RuntimeError("HH.ru did not confirm the application")
             if required_portfolio:
                 await self._ensure_cover_letter_in_chat(

@@ -8,7 +8,8 @@ from typing import Protocol
 
 from config import Settings
 from cover_letter import has_required_portfolio
-from database import ClaimResult, Database
+from database import ClaimResult, Database, VacancyStatus
+from vacancy_filter import title_language_rejection_reason, title_rejection_reason
 
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,29 @@ class ApprovalService:
             logger.warning("application_blocked job_id=%s reason=real_apply_disabled", job_id)
             return ApprovalResult(False, "Real applications are disabled")
         vacancy = self.database.get(job_id)
+        if vacancy is None:
+            return ApprovalResult(False, "Карточка вакансии больше недоступна")
+        if vacancy.status is not VacancyStatus.PENDING_APPROVAL:
+            if vacancy.status is VacancyStatus.APPLIED:
+                return ApprovalResult(False, "Отклик по этой карточке уже отправлен")
+            if vacancy.status in {VacancyStatus.APPROVED, VacancyStatus.APPLYING}:
+                return ApprovalResult(False, "Отклик по этой карточке уже обрабатывается")
+            return ApprovalResult(False, "Карточка уже обработана")
+        profile_rejection = self._profile_title_rejection(vacancy)
+        if profile_rejection:
+            if vacancy is not None and vacancy.status is VacancyStatus.PENDING_APPROVAL:
+                self.database.transition(
+                    job_id,
+                    VacancyStatus.PENDING_APPROVAL,
+                    VacancyStatus.SKIPPED,
+                    llm_reason=f"Excluded by current profile filter: {profile_rejection}",
+                )
+            logger.info(
+                "application_blocked job_id=%s reason=profile_filter:%s",
+                job_id,
+                profile_rejection,
+            )
+            return ApprovalResult(False, "Вакансия не проходит текущий фильтр профиля")
         if vacancy is not None and not has_required_portfolio(
             vacancy.cover_letter, self.settings.profile.cover_letter.required_portfolio_url
         ):
@@ -110,6 +134,20 @@ class ApprovalService:
         if vacancy is None or vacancy.status.value != "pending_approval":
             logger.warning("auto_application_blocked job_id=%s reason=not_pending", job_id)
             return ApprovalResult(False, "Vacancy is not pending")
+        profile_rejection = self._profile_title_rejection(vacancy)
+        if profile_rejection:
+            self.database.transition(
+                job_id,
+                VacancyStatus.PENDING_APPROVAL,
+                VacancyStatus.SKIPPED,
+                llm_reason=f"Excluded by current profile filter: {profile_rejection}",
+            )
+            logger.info(
+                "auto_application_blocked job_id=%s reason=profile_filter:%s",
+                job_id,
+                profile_rejection,
+            )
+            return ApprovalResult(False, "Vacancy is excluded by the current profile filter")
         if (
             vacancy.confidence is None
             or vacancy.confidence < self.settings.auto_apply.min_confidence
@@ -143,3 +181,13 @@ class ApprovalService:
             job_id, telegram_user_id, self.settings.tg_user_id
         )
         return ApprovalResult(skipped, "Vacancy skipped" if skipped else "Vacancy is not pending")
+
+    def _profile_title_rejection(self, vacancy) -> str | None:
+        if vacancy is None:
+            return None
+        candidate = self.settings.profile.candidate
+        return title_rejection_reason(
+            vacancy.title, candidate.excluded_positions
+        ) or title_language_rejection_reason(
+            vacancy.title, candidate.technologies
+        )

@@ -29,7 +29,11 @@ from llm.mistral_keys import MistralKeyCipher, MistralKeyManager
 from llm.types import LLMRequest
 from logging_setup import configure_logging
 from tg_bot import AgentControl, TelegramService
-from vacancy_filter import vacancy_rejection_reason
+from vacancy_filter import (
+    title_language_rejection_reason,
+    title_rejection_reason,
+    vacancy_rejection_reason,
+)
 from version import __version__
 from mascots import (
     enable_pesec_mode,
@@ -230,6 +234,24 @@ async def process_vacancy(
     if summary.previously_sent:
         if existing is None or existing.status is not VacancyStatus.PENDING_APPROVAL:
             return VacancyProcessResult("ignored")
+        title_rejection = title_rejection_reason(
+            existing.title, settings.profile.candidate.excluded_positions
+        ) or title_language_rejection_reason(
+            existing.title, settings.profile.candidate.technologies
+        )
+        if title_rejection:
+            database.transition(
+                summary.id,
+                VacancyStatus.PENDING_APPROVAL,
+                VacancyStatus.SKIPPED,
+                llm_reason=f"Excluded by current profile filter: {title_rejection}",
+            )
+            logger.info(
+                "pending_vacancy_skipped job_id=%s reason=%s",
+                summary.id,
+                title_rejection,
+            )
+            return VacancyProcessResult("rejected_by_filter", title_rejection)
         try:
             await telegram.send_preview(existing, include_actions=True)
         except TelegramAPIError:
