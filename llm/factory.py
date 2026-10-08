@@ -12,6 +12,8 @@ def create_llm_provider(settings: Settings, database: Database) -> LLMProvider:
     config = settings.llm
     if config.provider == "ollama":
         adapter = OllamaProvider(config.ollama_url)
+        # Ollama runs locally, so the cloud-provider request budget does not apply.
+        max_requests_per_day = None
     elif config.provider == "mistral":
         return MistralKeyManager(config, database)
     elif config.provider == "openai_compatible":
@@ -21,11 +23,12 @@ def create_llm_provider(settings: Settings, database: Database) -> LLMProvider:
             json_mode=config.openai_compatible_json_mode,
             reasoning_enabled=config.openai_compatible_reasoning_enabled,
         )
+        max_requests_per_day = config.max_requests_per_day
     else:
         raise LLMConfigurationError()
     return ManagedLLMProvider(
         adapter,
         database,
         max_retries=config.max_retries,
-        max_requests_per_day=config.max_requests_per_day,
+        max_requests_per_day=max_requests_per_day,
     )

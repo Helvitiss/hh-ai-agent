@@ -972,7 +972,7 @@ class Database:
         model: str,
         operation: str,
         now: datetime,
-        daily_limit: int,
+        daily_limit: int | None,
     ) -> int | None:
         start, end = self._day_bounds(now)
         with self._connect() as connection:
@@ -981,7 +981,7 @@ class Database:
                 "SELECT COUNT(*) FROM llm_requests WHERE started_at >= ? AND started_at < ?",
                 (start, end),
             ).fetchone()[0]
-            if count >= daily_limit:
+            if daily_limit is not None and count >= daily_limit:
                 return None
             cursor = connection.execute(
                 """

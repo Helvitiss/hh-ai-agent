@@ -33,7 +33,7 @@ class ManagedLLMProvider:
         *,
         max_retries: int,
         max_rate_limit_retries: int | None = None,
-        max_requests_per_day: int,
+        max_requests_per_day: int | None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         now_factory: Callable[[], datetime] = lambda: datetime.now().astimezone(),
     ):
